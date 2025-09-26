@@ -1,0 +1,85 @@
+apiVersion: metallb.io/v1beta1
+kind: UPnPAdvertisement
+metadata:
+  name: upnp-advertisement
+  namespace: metallb-system
+spec:
+  # Select all IP address pools for UPnP forwarding
+  # ipAddressPools: []
+
+  # Alternative: select pools by labels
+  # ipAddressPoolSelectors:
+  # - matchLabels:
+  #     metallb.universe.tf/address-pool: upnp-enabled
+
+  # Select nodes that can handle UPnP forwarding
+  # Usually this should be nodes with access to the router
+  nodeSelectors:
+  - matchLabels:
+      metallb.universe.tf/upnp-enabled: "true"
+
+  # Duration for port mappings in seconds (0 = permanent)
+  duration: 0
+
+  # Default description for port mappings
+  description: "MetalLB LoadBalancer"
+
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: upnp-pool
+  namespace: metallb-system
+  labels:
+    metallb.universe.tf/address-pool: upnp-enabled
+spec:
+  addresses:
+  - 192.168.1.100-192.168.1.110
+  autoAssign: true
+
+---
+# Example service with UPnP enabled
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-upnp
+  annotations:
+    metallb.universe.tf/upnp-enabled: "true"
+    metallb.universe.tf/upnp-description: "NGINX Web Server"
+    metallb.universe.tf/upnp-duration: "86400"  # 24 hours
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    app: nginx
+
+---
+# Example nginx deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        - containerPort: 443

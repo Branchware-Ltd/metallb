@@ -327,6 +327,16 @@ func newController(cfg controllerConfig) (*controller, error) {
 		protocols = append(protocols, config.Layer2)
 	}
 
+	// Initialize UPnP controller
+	upnpController, err := newUPnPController(cfg.Logger, cfg.MyNode, cfg.Layer2StatusChange)
+	if err != nil {
+		level.Warn(cfg.Logger).Log("msg", "failed to initialize UPnP controller, UPnP support will be disabled", "error", err)
+	} else {
+		handlers[config.UPnP] = upnpController
+		protocols = append(protocols, config.UPnP)
+		level.Info(cfg.Logger).Log("msg", "UPnP controller initialized successfully")
+	}
+
 	ret := &controller{
 		myNode:                cfg.MyNode,
 		bgpType:               cfg.bgpType,
@@ -339,6 +349,7 @@ func newController(cfg controllerConfig) (*controller, error) {
 	}
 	ret.announced[config.BGP] = map[string]bool{}
 	ret.announced[config.Layer2] = map[string]bool{}
+	ret.announced[config.UPnP] = map[string]bool{}
 
 	ret.nodes = make(map[string]*v1.Node)
 

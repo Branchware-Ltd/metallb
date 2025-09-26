@@ -1,0 +1,94 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.11.1
+  creationTimestamp: null
+  name: serviceupnpstatuses.metallb.io
+spec:
+  group: metallb.io
+  names:
+    kind: ServiceUPnPStatus
+    listKind: ServiceUPnPStatusList
+    plural: serviceupnpstatuses
+    singular: serviceupnpstatus
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.externalIP
+      name: External IP
+      type: string
+    - jsonPath: .spec.node
+      name: Node
+      type: string
+    - jsonPath: .spec.portMappings[*].externalPort
+      name: Port Mappings
+      priority: 10
+      type: integer
+    name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: ServiceUPnPStatus shows the current UPnP port forwarding status
+          for a service.
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal version, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ServiceUPnPStatusSpec defines the observed state of the UPnP
+              port forwarding for a service.
+            properties:
+              externalIP:
+                description: ExternalIP is the external IP address provided by the
+                  UPnP IGD router
+                type: string
+              node:
+                description: Node is the name of the node that is handling the UPnP
+                  port forwarding
+                type: string
+              portMappings:
+                description: PortMappings contains the list of UPnP port mappings
+                  created for this service
+                items:
+                  description: UPnPPortMapping represents a single UPnP port mapping
+                  properties:
+                    description:
+                      description: Description is the description of the port mapping
+                      type: string
+                    duration:
+                      description: Duration is the lease duration in seconds (0 means
+                        permanent)
+                      format: int32
+                      type: integer
+                    externalPort:
+                      description: ExternalPort is the external port on the router
+                      format: int32
+                      type: integer
+                    internalPort:
+                      description: InternalPort is the internal port on the service
+                      format: int32
+                      type: integer
+                    protocol:
+                      description: Protocol is the protocol (TCP or UDP)
+                      type: string
+                  required:
+                  - externalPort
+                  - internalPort
+                  - protocol
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

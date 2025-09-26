@@ -40,16 +40,17 @@ import (
 )
 
 type ClusterResources struct {
-	Pools           []metallbv1beta1.IPAddressPool    `json:"ipaddresspools"`
-	Peers           []metallbv1beta2.BGPPeer          `json:"bgppeers"`
-	BFDProfiles     []metallbv1beta1.BFDProfile       `json:"bfdprofiles"`
-	BGPAdvs         []metallbv1beta1.BGPAdvertisement `json:"bgpadvertisements"`
-	L2Advs          []metallbv1beta1.L2Advertisement  `json:"l2advertisements"`
-	Communities     []metallbv1beta1.Community        `json:"communities"`
-	PasswordSecrets map[string]corev1.Secret          `json:"passwordsecrets"`
-	Nodes           []corev1.Node                     `json:"nodes"`
-	Namespaces      []corev1.Namespace                `json:"namespaces"`
-	BGPExtras       corev1.ConfigMap                  `json:"bgpextras"`
+	Pools           []metallbv1beta1.IPAddressPool     `json:"ipaddresspools"`
+	Peers           []metallbv1beta2.BGPPeer           `json:"bgppeers"`
+	BFDProfiles     []metallbv1beta1.BFDProfile        `json:"bfdprofiles"`
+	BGPAdvs         []metallbv1beta1.BGPAdvertisement  `json:"bgpadvertisements"`
+	L2Advs          []metallbv1beta1.L2Advertisement   `json:"l2advertisements"`
+	UPnPAdvs        []metallbv1beta1.UPnPAdvertisement `json:"upnpadvertisements"`
+	Communities     []metallbv1beta1.Community         `json:"communities"`
+	PasswordSecrets map[string]corev1.Secret           `json:"passwordsecrets"`
+	Nodes           []corev1.Node                      `json:"nodes"`
+	Namespaces      []corev1.Namespace                 `json:"namespaces"`
+	BGPExtras       corev1.ConfigMap                   `json:"bgpextras"`
 }
 
 // Config is a parsed MetalLB configuration.
@@ -81,12 +82,13 @@ type Proto string
 const (
 	BGP    Proto = "bgp"
 	Layer2 Proto = "layer2"
+	UPnP   Proto = "upnp"
 )
 
 const bgpExtrasField = "extras"
 
 var Protocols = []Proto{
-	BGP, Layer2,
+	BGP, Layer2, UPnP,
 }
 
 // Peer is the configuration of a BGP peering session.
@@ -163,6 +165,9 @@ type Pool struct {
 	// The list of L2Advertisements associated with this address pool.
 	L2Advertisements []*L2Advertisement
 
+	// The list of UPnPAdvertisements associated with this address pool.
+	UPnPAdvertisements []*UPnPAdvertisement
+
 	cidrsPerAddresses map[string][]*net.IPNet
 
 	ServiceAllocations *ServiceAllocation
@@ -209,6 +214,18 @@ type L2Advertisement struct {
 	Interfaces []string
 	// AllInterfaces tells if all the interfaces are allowed for this advertisement
 	AllInterfaces bool
+}
+
+// UPnPAdvertisement describes a UPnP IGD port forwarding configuration.
+type UPnPAdvertisement struct {
+	// The map of nodes allowed for this advertisement
+	Nodes map[string]bool
+	// Whether to enable UPnP IGD port forwarding
+	Enabled bool
+	// Duration for port mappings in seconds (0 means permanent)
+	Duration int
+	// Description for port mappings
+	Description string
 }
 
 // BFDProfile describes a BFD profile to be applied to a set of peers.
@@ -336,6 +353,11 @@ func poolsFor(resources ClusterResources) (*Pools, error) {
 	}
 
 	err = setL2AdvertisementsToPools(resources.Pools, resources.L2Advs, resources.Nodes, pools)
+	if err != nil {
+		return nil, err
+	}
+
+	err = setUPnPAdvertisementsToPools(resources.Pools, resources.UPnPAdvs, resources.Nodes, pools)
 	if err != nil {
 		return nil, err
 	}
@@ -750,6 +772,97 @@ func l2AdvertisementFromCR(crdAd metallbv1beta1.L2Advertisement, nodes []corev1.
 		l2.AllInterfaces = true
 	}
 	return l2, nil
+}
+
+func setUPnPAdvertisementsToPools(ipPools []metallbv1beta1.IPAddressPool, upnpAdvs []metallbv1beta1.UPnPAdvertisement,
+	nodes []corev1.Node, ipPoolMap map[string]*Pool) error {
+	for _, upnpAdv := range upnpAdvs {
+		adv, err := upnpAdvertisementFromCR(upnpAdv, nodes)
+		if err != nil {
+			return err
+		}
+		ipPoolsSelected, err := selectedPools(ipPools, upnpAdv.Spec.IPAddressPoolSelectors)
+		if err != nil {
+			return err
+		}
+		// No pool selector means select all pools
+		if len(upnpAdv.Spec.IPAddressPools) == 0 && len(upnpAdv.Spec.IPAddressPoolSelectors) == 0 {
+			for _, pool := range ipPoolMap {
+				if !containsUPnPAdvertisement(pool.UPnPAdvertisements, adv) {
+					pool.UPnPAdvertisements = append(pool.UPnPAdvertisements, adv)
+				}
+			}
+		}
+		// Specific pool names
+		for _, poolName := range upnpAdv.Spec.IPAddressPools {
+			if pool, ok := ipPoolMap[poolName]; ok {
+				if !containsUPnPAdvertisement(pool.UPnPAdvertisements, adv) {
+					pool.UPnPAdvertisements = append(pool.UPnPAdvertisements, adv)
+				}
+			}
+		}
+		// Pool selectors
+		for _, poolName := range ipPoolsSelected {
+			if ipPool, ok := ipPoolMap[poolName]; ok {
+				if !containsUPnPAdvertisement(ipPool.UPnPAdvertisements, adv) {
+					ipPool.UPnPAdvertisements = append(ipPool.UPnPAdvertisements, adv)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func upnpAdvertisementFromCR(crdAd metallbv1beta1.UPnPAdvertisement, nodes []corev1.Node) (*UPnPAdvertisement, error) {
+	err := validateDuplicate(crdAd.Spec.IPAddressPools, "ipAddressPools")
+	if err != nil {
+		return nil, err
+	}
+	err = validateLabelSelectorDuplicate(crdAd.Spec.IPAddressPoolSelectors, "ipAddressPoolSelectors")
+	if err != nil {
+		return nil, err
+	}
+	err = validateLabelSelectorDuplicate(crdAd.Spec.NodeSelectors, "nodeSelectors")
+	if err != nil {
+		return nil, err
+	}
+	selected, err := selectedNodes(nodes, crdAd.Spec.NodeSelectors)
+	if err != nil {
+		return nil, errors.Join(err, fmt.Errorf("failed to parse node selector for %s", crdAd.Name))
+	}
+
+	description := crdAd.Spec.Description
+	if description == "" {
+		description = "MetalLB LoadBalancer"
+	}
+
+	upnp := &UPnPAdvertisement{
+		Nodes:       selected,
+		Enabled:     true,
+		Duration:    crdAd.Spec.Duration,
+		Description: description,
+	}
+
+	return upnp, nil
+}
+
+func containsUPnPAdvertisement(advs []*UPnPAdvertisement, toCheck *UPnPAdvertisement) bool {
+	for _, adv := range advs {
+		if adv.Enabled != toCheck.Enabled {
+			continue
+		}
+		if adv.Duration != toCheck.Duration {
+			continue
+		}
+		if adv.Description != toCheck.Description {
+			continue
+		}
+		if !reflect.DeepEqual(adv.Nodes, toCheck.Nodes) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func bgpAdvertisementFromCR(crdAd metallbv1beta1.BGPAdvertisement, communities map[string]community.BGPCommunity, nodes []corev1.Node) (*BGPAdvertisement, error) {
